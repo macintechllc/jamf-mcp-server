@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import jwksRsa from 'jwks-rsa';
+import { createHash, timingSafeEqual } from 'crypto';
 import { createLogger } from './logger.js';
 import { LRUCache } from '../utils/lru-cache.js';
 
@@ -155,6 +156,30 @@ const validateOktaToken = async (token: string): Promise<TokenPayload> => {
   });
 };
 
+// Validate a static shared-secret bearer token. This is a lighter-weight
+// alternative to Auth0/Okta for deployments that don't want to stand up a
+// third-party identity provider just to protect this endpoint. The operator
+// is responsible for generating a long, random secret and rotating it
+// themselves; unlike OAuth this token does not expire on its own.
+const validateSharedSecret = async (token: string): Promise<TokenPayload> => {
+  const secret = process.env.MCP_SHARED_SECRET;
+  if (!secret) {
+    throw new Error('MCP_SHARED_SECRET not configured for shared-secret provider');
+  }
+
+  // Hash both sides to fixed-length buffers first so timingSafeEqual never
+  // throws on a length mismatch, and compare in constant time so a caller
+  // can't learn the secret one byte at a time via response-timing attacks.
+  const expected = createHash('sha256').update(secret).digest();
+  const provided = createHash('sha256').update(token).digest();
+
+  if (!timingSafeEqual(expected, provided)) {
+    throw new Error('Invalid shared secret');
+  }
+
+  return { sub: 'shared-secret-client' };
+};
+
 // Validate token based on provider
 const validateToken = async (token: string): Promise<TokenPayload> => {
   if (!token || typeof token !== 'string') {
@@ -170,7 +195,10 @@ const validateToken = async (token: string): Promise<TokenPayload> => {
         
       case 'okta':
         return await validateOktaToken(token);
-        
+
+      case 'shared-secret':
+        return await validateSharedSecret(token);
+
       case 'dev': {
         // Development mode - use local JWT validation
         if (process.env.NODE_ENV !== 'development') {
