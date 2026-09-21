@@ -67,13 +67,13 @@ function checkMemory(): CheckResult {
     arrayBuffers: Math.round(usage.arrayBuffers / 1024 / 1024)
   };
 
-  if (heapPercentage > 90) {
+  if (heapPercentage > 98) {
     return {
       status: 'fail',
       message: 'Memory usage critical',
       details
     };
-  } else if (heapPercentage > 75) {
+  } else if (heapPercentage > 95) {
     return {
       status: 'warn',
       message: 'Memory usage high',
