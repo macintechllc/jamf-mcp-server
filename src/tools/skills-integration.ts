@@ -22,52 +22,43 @@ export function integrateSkillsWithTools(
   skillsManager: SkillsManager,
   jamfClient: IJamfApiClient
 ): void {
-  // Initialize the skills manager with a proper context
-  const skillContext = {
-    callTool: async (toolName: string, params: any) => {
-      // Call the original tool handler
-      if (originalCallToolHandler) {
-        const request = {
-          params: {
-            name: toolName,
-            arguments: params
-          }
-        };
-        return await originalCallToolHandler(request);
-      }
-      throw new Error(`Tool ${toolName} not found`);
-    },
-    env: {
-      jamfUrl: process.env.JAMF_URL || '',
-      jamfClientId: process.env.JAMF_CLIENT_ID || '',
-    },
-    logger: {
-      info: (message: string, meta?: any) => {
-        console.log(`[SKILL INFO] ${message}`, meta || '');
-      },
-      warn: (message: string, meta?: any) => {
-        console.warn(`[SKILL WARN] ${message}`, meta || '');
-      },
-      error: (message: string, meta?: any) => {
-        console.error(`[SKILL ERROR] ${message}`, meta || '');
-      }
-    },
-    jamfClient // Add jamfClient to context for direct access if needed
-  };
-  
-  skillsManager.initialize(skillContext as any);
+  // Capture the handlers registerTools() already registered. There is no
+  // public SDK API to read back a handler you previously set, so this reads
+  // the Protocol base class's own _requestHandlers map - the exact Map
+  // setRequestHandler() itself writes to - before we replace those entries
+  // below. (The previous approach read from a server.__handlers object that
+  // nothing ever populated, so these were always undefined.)
+  const requestHandlers = (server as any)._requestHandlers as
+    | Map<string, (request: any, extra: any) => Promise<any>>
+    | undefined;
+  originalListToolsHandler = requestHandlers?.get('tools/list');
+  originalCallToolHandler = requestHandlers?.get('tools/call');
 
-  // Store the original handlers before overriding
-  const handlers = (server as any).__handlers || {};
-  originalListToolsHandler = handlers['tools/list'];
-  originalCallToolHandler = handlers['tools/call'];
+  // SkillsManager.initialize() unconditionally calls createSkillContext(server),
+  // and that function calls server.handleToolCall(...) internally - so the
+  // object handed to initialize() must actually implement handleToolCall.
+  // (Passing a plain context object here, as this file previously did, means
+  // createSkillContext ends up calling `.handleToolCall` on that plain
+  // object instead of a real server, which is exactly the
+  // "server.handleToolCall is not a function" crash this fixes.)
+  (server as any).handleToolCall = async (name: string, args: any) => {
+    if (originalCallToolHandler) {
+      return await originalCallToolHandler(
+        { method: 'tools/call', params: { name, arguments: args } },
+        {}
+      );
+    }
+    throw new Error(`Tool ${name} not found`);
+  };
+
+  skillsManager.initialize(server as any);
 
   // Override the ListTools handler to include skills
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     // Get original tools
     let originalTools: Tool[] = [];
     if (originalListToolsHandler) {
-      const result = await originalListToolsHandler({});
+      const result = await originalListToolsHandler({ method: 'tools/list', params: {} }, {});
       originalTools = result.tools || [];
     }
 
@@ -119,13 +110,6 @@ export function integrateSkillsWithTools(
     
     throw new Error(`Unknown tool: ${name}`);
   });
-
-  // Store handlers for future reference
-  (server as any).__handlers = {
-    ...handlers,
-    ['tools/list']: originalListToolsHandler,
-    ['tools/call']: originalCallToolHandler
-  };
 }
 
 export function getSkillTools(skillsManager: SkillsManager): Tool[] {
