@@ -76,16 +76,17 @@ export const GetPolicyAnalysisSchema = z.object({
 export async function executeGetFleetOverview(jamfClient: IJamfApiClient): Promise<any> {
   logger.info('Executing compound tool: getFleetOverview');
 
-  const [inventorySummary, complianceSummary, mobileDevices] = await Promise.all([
-    jamfClient.getInventorySummary().catch((e: Error) => ({ error: e.message })),
-    jamfClient.getDeviceComplianceSummary().catch((e: Error) => ({ error: e.message })),
-    jamfClient.searchMobileDevices('', 10).catch(() => []),
+  const [inventorySummary, complianceSummary, mobileDevices, mobileDeviceCount] = await Promise.all([
+        jamfClient.getInventorySummary().catch((e: Error) => ({ error: e.message })),
+        jamfClient.getDeviceComplianceSummary().catch((e: Error) => ({ error: e.message })),
+        jamfClient.searchMobileDevices('', 10).catch(() => []),
+        jamfClient.getMobileDeviceCount().catch(() => 0),
   ]);
 
   const computerCount = inventorySummary?.summary?.totalComputers
     ?? inventorySummary?.computers?.total
     ?? 'unknown';
-  const mobileCount = Array.isArray(mobileDevices) ? mobileDevices.length : (inventorySummary?.summary?.totalMobileDevices ?? 'unknown');
+  const mobileCount = mobileDeviceCount || (Array.isArray(mobileDevices) ? mobileDevices.length : (inventorySummary?.summary?.totalMobileDevices ?? 'unknown'));
   const complianceRate = complianceSummary?.summary?.complianceRate ?? 'unknown';
 
   const summary = `Fleet overview: ${computerCount} computers, ${mobileCount} mobile devices. Compliance rate: ${complianceRate}%.`;
