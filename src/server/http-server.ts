@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { JamfApiClientHybrid } from '../jamf-client-hybrid.js';
 import { registerTools } from '../tools/index.js';
 import { registerResources } from '../resources/index.js';
@@ -485,25 +485,24 @@ const validateConfig = () => {
   }
 
   // Validate OAuth provider configuration
-  if (!['dev', 'auth0', 'okta'].includes(process.env.OAUTH_PROVIDER || 'auth0')) {
-    throw new Error('Invalid OAUTH_PROVIDER. Must be one of: dev, auth0, okta');
+  if (!['dev', 'auth0', 'okta', 'shared-secret'].includes(process.env.OAUTH_PROVIDER || 'auth0')) {
+    throw new Error('Invalid OAUTH_PROVIDER. Must be one of: dev, auth0, okta, shared-secret');
+  }
+
+  if (process.env.OAUTH_PROVIDER === 'shared-secret' && !process.env.MCP_SHARED_SECRET) {
+    throw new Error('MCP_SHARED_SECRET must be set when OAUTH_PROVIDER=shared-secret');
   }
 };
 
-// MCP endpoint with authentication
-app.use('/mcp', authMiddleware, async (req: Request, res: Response) => {
+// MCP endpoint with authentication (stateless Streamable HTTP transport).
+// A fresh Server + transport is created per request rather than kept in a
+// session map, so this works correctly with no shared state if App Runner
+// ever scales this service to more than one instance.
+const handleMcpRequest = async (req: Request, res: Response) => {
   let server: Server | null = null;
-  let transport: SSEServerTransport | null = null;
+  let transport: StreamableHTTPServerTransport | null = null;
 
   try {
-    // Set SSE headers
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no', // Disable Nginx buffering
-    });
-
     // Create MCP server instance
     server = new Server(
       {
@@ -533,47 +532,60 @@ app.use('/mcp', authMiddleware, async (req: Request, res: Response) => {
     registerTools(server, jamfClient as any);
     registerResources(server, jamfClient as any);
     registerPrompts(server);
-    
+
     // Integrate skills with existing tools for Claude
     integrateSkillsWithTools(server, skillsManager, jamfClient);
 
-    // Create SSE transport for HTTP
-    transport = new SSEServerTransport('/mcp', res);
+    // Stateless Streamable HTTP transport: no session ID, no server-initiated
+    // SSE stream to resume, one request in, one response out.
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+
     await server.connect(transport);
-    
+    await transport.handleRequest(req, res, req.body);
+
     logger.info(`MCP connection established for user: ${(req as any).user?.sub || 'unknown'}`);
 
-    // Handle client disconnect
-    req.on('close', () => {
-      logger.info('Client disconnected');
-      if (transport) {
-        transport.close();
-      }
+    res.on('close', () => {
+      logger.info('Request closed');
+      transport?.close();
+      server?.close();
     });
-
-    // Keep connection alive with periodic pings
-    const pingInterval = setInterval(() => {
-      if (res.writable) {
-        res.write(':ping\n\n');
-      } else {
-        clearInterval(pingInterval);
-      }
-    }, 30000); // 30 seconds
-
-    // Clean up on connection close
-    req.on('close', () => {
-      clearInterval(pingInterval);
-    });
-
   } catch (error) {
     logger.error('MCP connection error:', error);
     if (!res.headersSent) {
-      res.status(500).json({ 
-        error: 'Failed to establish MCP connection',
-        message: error instanceof Error ? error.message : 'Unknown error',
+      res.status(500).json({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32603,
+          message: 'Failed to establish MCP connection',
+        },
       });
     }
   }
+};
+
+app.post('/mcp', authMiddleware, handleMcpRequest);
+
+// This server runs stateless (no sessionIdGenerator), so there is no
+// server-initiated notification stream to open (GET) or session to end
+// (DELETE). Respond per the Streamable HTTP spec instead of 404ing.
+app.get('/mcp', authMiddleware, (_req: Request, res: Response) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    id: null,
+    error: { code: -32000, message: 'Method not allowed: this server runs in stateless mode.' },
+  });
+});
+
+app.delete('/mcp', authMiddleware, (_req: Request, res: Response) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    id: null,
+    error: { code: -32000, message: 'Method not allowed: this server runs in stateless mode.' },
+  });
 });
 
 // 404 handler
@@ -650,4 +662,4 @@ try {
 } catch (error) {
   logger.error('Failed to start server:', error);
   process.exit(1);
-}
+  }
