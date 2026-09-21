@@ -620,10 +620,10 @@ function getEnrichment(toolName: string, data: any): Enrichment | null {
 
       case 'getFleetOverview': {
         const parsed = typeof data === 'string' ? JSON.parse(data) : data;
-        const computers = parsed?.computers?.total ?? parsed?.totalComputers ?? '?';
-        const mobile = parsed?.mobileDevices?.total ?? parsed?.totalMobileDevices ?? '?';
+        const computers = parsed?.data?.inventory?.computers?.total ?? '?';
+                const mobile = parsed?.data?.inventory?.mobileDevices?.total ?? '?';
         return {
-          summary: `Fleet overview: ${computers} computers, ${mobile} mobile devices.`,
+summary: parsed?.summary ?? `Fleet overview: ${computers} computers, ${mobile} mobile devices.`,
           suggestedNextActions: [
             'Use getSecurityPosture for security analysis',
             'Use checkDeviceCompliance for compliance details',
