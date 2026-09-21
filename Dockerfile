@@ -43,7 +43,7 @@ RUN npm ci --only=production && npm cache clean --force
 
 # Copy built application from builder
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/public ./public
+COPY --from=builder /app/chatgpt/public ./chatgpt/public
 
 # Create necessary directories
 RUN mkdir -p logs && chown -R nodejs:nodejs /app
@@ -62,4 +62,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 ENTRYPOINT ["dumb-init", "--"]
 
 # Default command (can be overridden)
-CMD ["node", "dist/index-main.js"]
+CMD ["node", "dist/server/http-server.js"]
