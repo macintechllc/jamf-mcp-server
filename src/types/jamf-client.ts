@@ -98,6 +98,7 @@ export interface IJamfApiClient {
 
   // Computers
   getComputerCount(): Promise<number>;
+    getMobileDeviceCount(): Promise<number>;
   searchComputers(query: string, limit?: number): Promise<Computer[]>;
   getComputerDetails(id: string): Promise<any>;
   getAllComputers(limit?: number): Promise<any[]>;
