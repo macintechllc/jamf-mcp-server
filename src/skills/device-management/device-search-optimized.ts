@@ -201,7 +201,7 @@ export async function deviceSearchOptimized(
     response += `\n`;
     response += `**Found**: ${devices.length} devices`;
     if (totalFound > devices.length) {
-      response += ` (from ${totalFound} total)`;
+response += ` (${totalFound} matched this search)`;
     }
     response += `\n\n`;
     
