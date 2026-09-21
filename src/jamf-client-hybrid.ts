@@ -1963,6 +1963,40 @@ export class JamfApiClientHybrid implements IJamfApiClient {
     }
   }
 
+    /**
+       * Get the true total number of mobile devices in Jamf Pro, independent of
+          * any search/page-size limit. searchMobileDevices() only returns a single
+             * page bounded by its `limit` parameter, so its .length is NOT a reliable
+                * inventory count once the real fleet exceeds that page size (mirrors
+                   * getComputerCount() above, for the same reason).
+                      */
+    async getMobileDeviceCount(): Promise<number> {
+          await this.ensureAuthenticated();
+
+          try {
+                  const response = await this.axiosInstance.get('/api/v2/mobile-devices', {
+                            params: { 'page-size': 1 },
+                  });
+                  if (typeof response.data.totalCount === 'number') {
+                            return response.data.totalCount;
+                  }
+          } catch (error) {
+                  logger.debug('Jamf Pro API mobile device count failed, falling back to Classic API', {
+                            error: error instanceof Error ? error.message : String(error),
+                  });
+          }
+
+          try {
+                  const response = await this.axiosInstance.get('/JSSResource/mobiledevices');
+                  const devices = response.data.mobile_devices || [];
+                  return devices.length;
+          } catch (error) {
+                  logger.debug('Classic API mobile device count failed:', error);
+          }
+
+          return 0;
+    }
+
   /**
    * Get mobile device details
    */
@@ -2503,13 +2537,14 @@ export class JamfApiClientHybrid implements IJamfApiClient {
       logger.info('Generating inventory summary report...');
       
       // Fetch a sample for distribution analysis + accurate counts
-      const [computers, mobileDevices, computerCount] = await Promise.all([
-        this.searchComputers('', 500).catch(() => []),
-        this.searchMobileDevices('', 500).catch(() => []),
-        this.getComputerCount().catch(() => 0),
+      const [computers, mobileDevices, computerCount, mobileDeviceCount] = await Promise.all([
+                this.searchComputers('', 500).catch(() => []),
+                this.searchMobileDevices('', 500).catch(() => []),
+                this.getComputerCount().catch(() => 0),
+                this.getMobileDeviceCount().catch(() => 0),
       ]);
       const totalComputers = computerCount || computers.length;
-      const totalMobileDevices = mobileDevices.length;
+      const totalMobileDevices = mobileDeviceCount || mobileDevices.length;
       
       // OS Version distribution for computers
       const computerOSVersions = new Map<string, number>();
